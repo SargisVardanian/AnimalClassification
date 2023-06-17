@@ -1,56 +1,71 @@
 import os
-import cv2
-import numpy as np
-from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import LabelEncoder
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import Dense, Conv2D, MaxPooling2D, Flatten
-from tensorflow.keras.utils import to_categorical
+from keras.callbacks import ModelCheckpoint
+from keras.applications import MobileNetV2
+from keras.layers import Dense, Flatten
+from keras.preprocessing.image import ImageDataGenerator
+from keras.models import Sequential
+from keras.layers import Dropout
 
-# Путь к папке с данными обучения
 train_path = 'train'
 
-# Загрузка изображений и меток классов из папки обучения
-images = []
-labels = []
 
-for class_name in os.listdir(train_path):
-    class_path = os.path.join(train_path, class_name)
-    if os.path.isdir(class_path):
-        for image_name in os.listdir(class_path):
-            image_path = os.path.join(class_path, image_name)
-            image = cv2.imread(image_path)
-            print('image', image.shape, class_name)
-            images.append(image)
-            labels.append(class_name)
+class_names = []
+class_dirs = [d for d in os.listdir(train_path) if os.path.isdir(os.path.join(train_path, d))]
+num_classes = len(class_dirs)
 
-# Преобразование изображений и меток в массивы NumPy
-images = np.array(images)
-labels = np.array(labels)
+base_model = MobileNetV2(weights='imagenet', include_top=False, input_shape=(224, 224, 3))
+base_model.trainable = False
 
-# Преобразование меток в числовые значения
-label_encoder = LabelEncoder()
-labels = label_encoder.fit_transform(labels)
 
-# Разделение данных на обучающий и проверочный наборы
-train_images, val_images, train_labels, val_labels = train_test_split(images, labels, test_size=0.2, random_state=42)
+model = Sequential([
+    base_model,
+    Flatten(),
+    Dense(512, activation='relu'),
+    Dropout(0.2),  # Добавление слоя Dropout перед последним полносвязным слоем
+    Dense(256, activation='relu'),
+    Dense(num_classes, activation='softmax')
+])
 
-# Преобразование меток в формат one-hot
-train_labels = to_categorical(train_labels)
-val_labels = to_categorical(val_labels)
-
-# Создание модели
-model = Sequential()
-model.add(Conv2D(32, (3, 3), activation='relu', input_shape=(224, 224, 3)))
-model.add(MaxPooling2D((2, 2)))
-model.add(Conv2D(64, (3, 3), activation='relu'))
-model.add(MaxPooling2D((2, 2)))
-model.add(Flatten())
-model.add(Dense(64, activation='relu'))
-model.add(Dense(len(label_encoder.classes_), activation='softmax'))
-
-# Компиляция модели
 model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
 
-# Обучение модели
-model.fit(train_images, train_labels, epochs=10, batch_size=32, validation_data=(val_images, val_labels))
+
+
+
+batch_size = 128
+train_datagen = ImageDataGenerator(
+    rescale=1.0/255.0,
+    rotation_range=20,
+    zoom_range=0.2,
+    width_shift_range=0.2,
+    height_shift_range=0.2,
+    horizontal_flip=True,
+    validation_split=0.2
+)
+
+train_generator = train_datagen.flow_from_directory(
+    train_path,
+    target_size=(224, 224),
+    batch_size=batch_size,
+    class_mode='categorical',
+    subset='training'
+)
+
+val_generator = train_datagen.flow_from_directory(
+    train_path,
+    target_size=(224, 224),
+    batch_size=batch_size,
+    class_mode='categorical',
+    subset='validation'
+)
+
+model.fit_generator(
+    train_generator,
+    steps_per_epoch=train_generator.samples // batch_size,
+    epochs=16,
+    validation_data=val_generator,
+    validation_steps=val_generator.samples // batch_size
+)
+
+
+model.save_weights('model_weights.h5')
+model.save('full_model.h5')
